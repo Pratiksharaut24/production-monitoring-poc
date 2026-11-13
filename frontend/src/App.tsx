@@ -573,6 +573,19 @@ const icon = (name: string) => {
 
 
 
+const QUALITY_REJECTION_REASONS = [
+  'Dimensional Issue', 'Surface Defect', 'Wrong Size', 'Material Defect',
+  'Crack / Breakage', 'Hardness Issue', 'Burr / Sharp Edge',
+  'Porosity / Casting Defect', 'Machine Setting Issue', 'Other',
+];
+
+const MANUFACTURING_PROCESS_OPTIONS = [
+  'Raw Material Cutting', 'Turning', 'Facing', 'Drilling', 'Boring',
+  'Milling', 'Gear Hobbing', 'Gear Shaping', 'Broaching', 'Heat Treatment',
+  'Grinding', 'Gear Grinding', 'Deburring', 'Finishing', 'Quality Inspection',
+  'Final Inspection', 'Packing', 'Other',
+];
+
 type QualityRecord = {
   Quality_ID?: string; Order_ID: string; Production_ID: string; Inspection_Date: string;
   Inspected_Qty: number; Accepted_Qty: number; Rejected_Qty: number; Rework_Qty: number;
@@ -666,7 +679,7 @@ const [managerPage, setManagerPage] = useState<
         if (!response.ok || result.success !== true || !Array.isArray(result.records)) {
           throw new Error(result.error || result.message || `Could not load Quality/Rework records (HTTP ${response.status}).`);
         }
-        if (!cancelled) setQualityRecords(result.records);
+        if (!cancelled) setQualityRecords([...result.records].sort((a, b) => { const dateDiff = String(b.Inspection_Date || '').localeCompare(String(a.Inspection_Date || '')); return dateDiff || String(b.Quality_ID || '').localeCompare(String(a.Quality_ID || '')); }));
       } catch (error) {
         if (!cancelled) setQualityError(error instanceof Error ? error.message : 'Could not load Quality/Rework records.');
       } finally {
@@ -1690,7 +1703,7 @@ const pageTitle =
       const result = await response.json();
       if (!response.ok || result.success !== true) throw new Error(result.message || result.error || 'Quality record was not saved.');
       setQualityMessage('Quality/Rework record saved.'); setQualityForm({ orderId: '', productionId: '', inspectionDate: todayDate(), inspectedQty: '', acceptedQty: '', rejectedQty: '0', reworkQty: '0', reworkStatus: 'Not Required', reworkCompletedQty: '0', rejectionReason: '', remarks: '' });
-      const refreshed = await fetch(`${API_URL}?action=qualityRecords`, { method: 'GET', redirect: 'follow' }); const body = await refreshed.text(); const data = JSON.parse(body) as { success?: boolean; records?: QualityRecord[]; error?: string; message?: string }; if (!refreshed.ok || data.success !== true || !Array.isArray(data.records)) throw new Error(data.error || data.message || 'Quality record saved, but the refreshed list could not be loaded.'); setQualityRecords(data.records);
+      const refreshed = await fetch(`${API_URL}?action=qualityRecords`, { method: 'GET', redirect: 'follow' }); const body = await refreshed.text(); const data = JSON.parse(body) as { success?: boolean; records?: QualityRecord[]; error?: string; message?: string }; if (!refreshed.ok || data.success !== true || !Array.isArray(data.records)) throw new Error(data.error || data.message || 'Quality record saved, but the refreshed list could not be loaded.'); setQualityRecords([...data.records].sort((a, b) => { const dateDiff = String(b.Inspection_Date || '').localeCompare(String(a.Inspection_Date || '')); return dateDiff || String(b.Quality_ID || '').localeCompare(String(a.Quality_ID || '')); }));
     } catch (error) { setQualityError(error instanceof Error ? error.message : 'Unable to save quality record.'); } finally { setQualitySaving(false); }
   }}>
     <div className="form-grid">
@@ -1703,7 +1716,7 @@ const pageTitle =
       <Field label="Rework Qty"><input type="number" min="0" value={qualityForm.reworkQty} onChange={e=>setQualityForm({...qualityForm,reworkQty:e.target.value})} required /></Field>
       <Field label="Rework Status"><select value={qualityForm.reworkStatus} onChange={e=>setQualityForm({...qualityForm,reworkStatus:e.target.value})}><option>Not Required</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></Field>
       <Field label="Rework Completed Qty"><input type="number" min="0" value={qualityForm.reworkCompletedQty} onChange={e=>setQualityForm({...qualityForm,reworkCompletedQty:e.target.value})} required /></Field>
-      <Field label="Rejection Reason"><input value={qualityForm.rejectionReason} onChange={e=>setQualityForm({...qualityForm,rejectionReason:e.target.value})} /></Field>
+      <Field label="Rejection Reason"><select value={qualityForm.rejectionReason} onChange={e=>setQualityForm({...qualityForm,rejectionReason:e.target.value})}><option value="">Select rejection reason</option>{QUALITY_REJECTION_REASONS.map(reason => <option key={reason} value={reason}>{reason}</option>)}</select></Field>
       <Field label="Remarks"><input value={qualityForm.remarks} onChange={e=>setQualityForm({...qualityForm,remarks:e.target.value})} /></Field>
     </div>
     {qualityError && <p className="form-message" role="alert">{qualityError}</p>}{qualityMessage && <p className="form-message" role="status">{qualityMessage}</p>}
@@ -2280,8 +2293,9 @@ function MachineProcessPlanning() {
   });
 
   const nextSequence = journeys
-    .filter(journey => journey.orderId.trim() === form.orderId.trim())
-    .reduce((max, journey) => Math.max(max, journey.sequence || 0), 0) + 1;
+    .filter(journey => journey.orderId.trim().toLowerCase() === form.orderId.trim().toLowerCase()
+      && journey.partNumber.trim().toLowerCase() === form.partNumber.trim().toLowerCase())
+    .reduce((max, journey) => Math.max(max, Number(journey.sequence) || 0), 0) + 1;
 
   const loadJourneys = async () => {
     setLoading(true);
@@ -2332,6 +2346,10 @@ function MachineProcessPlanning() {
     setSaving(true); setMessage(''); setError('');
     try {
       if (!form.orderId.trim()) throw new Error('Enter an Order ID.');
+      if (!form.partNumber.trim()) throw new Error('Enter a Part Number.');
+      if (!form.processName.trim()) throw new Error('Select a Process Name.');
+      if (!form.machineId.trim()) throw new Error('Enter a Machine ID.');
+      if (!Number.isInteger(Number(form.plannedQty)) || Number(form.plannedQty) <= 0) throw new Error('Planned Quantity must be a positive whole number.');
       if (!form.assignedSupervisorEmail.trim()) throw new Error('Please select a Supervisor for this process.');
       const payload = {
         action: 'saveMachineProcessPlan',
@@ -2390,7 +2408,7 @@ function MachineProcessPlanning() {
           <Field label="Order ID"><input value={form.orderId} onChange={e => setForm({ ...form, orderId: e.target.value })} placeholder="Enter registered Order ID" required /></Field>
           <Field label="Part Number"><input value={form.partNumber} onChange={e => setForm({ ...form, partNumber: e.target.value })} placeholder="Part number" required /></Field>
           <Field label="Machine ID"><input value={form.machineId} onChange={e => setForm({ ...form, machineId: e.target.value })} placeholder="Machine ID" required /></Field>
-          <Field label="Process Name"><input value={form.processName} onChange={e => setForm({ ...form, processName: e.target.value })} placeholder="e.g. Turning" required /></Field>
+          <Field label="Process Name"><select value={form.processName} onChange={e => setForm({ ...form, processName: e.target.value })} required><option value="">Select process</option>{MANUFACTURING_PROCESS_OPTIONS.map(process => <option key={process} value={process}>{process}</option>)}</select></Field>
           <Field label="Process Sequence (Automatic)"><input type="number" value={form.orderId.trim() ? nextSequence : ''} readOnly aria-readonly="true" /></Field>
           <Field label="Planned Quantity"><input type="number" min="1" step="1" value={form.plannedQty} onChange={e => setForm({ ...form, plannedQty: e.target.value })} required /></Field>
           <Field label="Assigned Supervisor"><select value={form.assignedSupervisorEmail} onChange={e => setForm({ ...form, assignedSupervisorEmail: e.target.value })} required>
